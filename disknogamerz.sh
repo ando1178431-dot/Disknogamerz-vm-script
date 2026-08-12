@@ -91,7 +91,7 @@ validate_input() {
 }
 
 check_dependencies() {
-    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img" "ssh")
+    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img" "ssh" "ssh-keyscan")
     local missing_deps=()
     for dep in "${deps[@]}"; do
         command -v "$dep" &> /dev/null || missing_deps+=("$dep")
@@ -242,8 +242,8 @@ create_new_vm() {
     done
 
     while true; do
-        read -p "$(print_status "INPUT" "Memory in MB (default: 2048): ")" MEMORY
-        MEMORY="${MEMORY:-2048}"
+        read -p "$(print_status "INPUT" "Memory in MB (default: 1536): ")" MEMORY
+        MEMORY="${MEMORY:-1536}"
         validate_input "number" "$MEMORY" && break
     done
 
@@ -294,7 +294,7 @@ start_vm() {
                 accel_flags=("-enable-kvm" "-cpu" "host")
                 print_status "INFO" "Hardware KVM Acceleration: ENABLED 🚀"
             else
-                accel_flags=("-cpu" "max")
+                accel_flags=("-cpu" "qemu64")
                 print_status "WARN" "Software Emulation Mode (KVM not available)."
             fi
 
@@ -326,7 +326,7 @@ start_vm() {
             nohup "${qemu_cmd[@]}" > "$log_file" 2>&1 &
             local qemu_pid=$!
 
-            sleep 2
+            sleep 3
             if ! kill -0 "$qemu_pid" 2>/dev/null; then
                 print_status "ERROR" "VM failed to start! Boot Log:"
                 echo -e "${C_RED}----------------------------------------${NC}"
@@ -335,21 +335,27 @@ start_vm() {
                 return
             fi
 
-            print_status "INFO" "Booting OS & starting SSH service..."
+            print_status "INFO" "Waiting for Guest OS SSH Daemon to finish booting..."
             echo -n "   "
             local retries=0
-            while [ $retries -lt 45 ]; do
-                if (echo > /dev/tcp/localhost/"$SSH_PORT") 2>/dev/null; then
+            local max_retries=60
+            while [ $retries -lt $max_retries ]; do
+                if ssh-keyscan -p "$SSH_PORT" 127.0.0.1 2>/dev/null | grep -q "ssh-rsa\|ssh-ed25519\|ecdsa-sha2"; then
                     break
                 fi
                 echo -n "█"
-                sleep 2
+                sleep 3
                 ((retries++))
+                if ! kill -0 "$qemu_pid" 2>/dev/null; then
+                    echo
+                    print_status "ERROR" "QEMU Process crashed or was killed by system limits during boot."
+                    return
+                fi
             done
             echo -e "\n"
 
-            if [ $retries -eq 45 ]; then
-                print_status "WARN" "Boot taking longer than expected. Log tail:"
+            if [ $retries -eq $max_retries ]; then
+                print_status "WARN" "SSH timeout reached. VM is still booting slow. Log tail:"
                 tail -n 8 "$log_file"
                 return
             fi
@@ -357,8 +363,9 @@ start_vm() {
             print_status "INFO" "VM '$vm_name' is already running!"
         fi
 
+        ssh-keygen -R "[localhost]:$SSH_PORT" &>/dev/null
         print_status "SUCCESS" "VM Boot Complete! Connecting to interactive SSH shell..."
-        echo -e " ${C_NEON_PINK}✦ Enter Password:${NC} ${C_YELLOW}$PASSWORD${NC}\n"
+        echo -e " ${C_NEON_PINK}✦ Password:${NC} ${C_YELLOW}$PASSWORD${NC}\n"
         
         ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$SSH_PORT" "$USERNAME@localhost"
         
