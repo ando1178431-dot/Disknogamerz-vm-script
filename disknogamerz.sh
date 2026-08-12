@@ -1,5 +1,4 @@
 #!/bin/bash
-set -euo pipefail
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║                 DISKNOGAMERZ VM MANAGER                      ║
@@ -7,7 +6,6 @@ set -euo pipefail
 # ╚══════════════════════════════════════════════════════════════╝
 
 # Supported OS Cloud Images
-# Format: "OS_TYPE|CODENAME|IMG_URL|DEFAULT_HOSTNAME|DEFAULT_USERNAME|DEFAULT_PASSWORD"
 declare -A OS_OPTIONS=(
     ["Ubuntu 24.04 LTS (Noble)"]="ubuntu|noble|https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img|disknogamerz-ubuntu|disknogamerz|disk123"
     ["Ubuntu 22.04 LTS (Jammy)"]="ubuntu|jammy|https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img|disknogamerz-ubuntu|disknogamerz|disk123"
@@ -58,11 +56,26 @@ validate_input() {
     local type=$1
     local value=$2
     case $type in
-        "number") [[ "$value" =~ ^[0-9]+$ ]] || { print_status "ERROR" "Must be a number"; return 1; } ;;
-        "size") [[ "$value" =~ ^[0-9]+[GgMm]$ ]] || { print_status "ERROR" "Must be a size with unit (e.g., 20G, 2048M)"; return 1; } ;;
-        "port") ([[ "$value" =~ ^[0-9]+$ ]] && [ "$value" -ge 22 ] && [ "$value" -le 65535 ]) || { print_status "ERROR" "Port must be 22-65535"; return 1; } ;;
-        "name") [[ "$value" =~ ^[a-zA-Z0-9_-]+$ ]] || { print_status "ERROR" "Only letters, numbers, hyphens, and underscores allowed"; return 1; } ;;
-        "username") [[ "$value" =~ ^[a-z_][a-z0-9_-]*$ ]] || { print_status "ERROR" "Invalid username format"; return 1; } ;;
+        "number")
+            [[ "$value" =~ ^[0-9]+$ ]] || { print_status "ERROR" "Must be a valid positive integer"; return 1; }
+            ;;
+        "size")
+            [[ "$value" =~ ^[0-9]+[GgMm]$ ]] || { print_status "ERROR" "Invalid disk size format! Example: 20G or 2048M"; return 1; }
+            ;;
+        "port")
+            if [[ "$value" =~ ^[0-9]+$ ]] && [ "$value" -ge 22 ] && [ "$value" -le 65535 ]; then
+                return 0
+            else
+                print_status "ERROR" "Port must be a number between 22 and 65535"
+                return 1
+            fi
+            ;;
+        "name")
+            [[ "$value" =~ ^[a-zA-Z0-9_-]+$ ]] || { print_status "ERROR" "Only letters, numbers, hyphens, and underscores allowed"; return 1; }
+            ;;
+        "username")
+            [[ "$value" =~ ^[a-z_][a-z0-9_-]*$ ]] || { print_status "ERROR" "Must start with a lowercase letter and contain no special characters"; return 1; }
+            ;;
     esac
     return 0
 }
@@ -203,37 +216,79 @@ create_new_vm() {
         read -p "$(print_status "INPUT" "VM Name (default: $DEFAULT_HOSTNAME): ")" VM_NAME
         VM_NAME="${VM_NAME:-$DEFAULT_HOSTNAME}"
         if validate_input "name" "$VM_NAME"; then
-            [[ -f "$VM_DIR/$VM_NAME.conf" ]] && print_status "ERROR" "VM name already exists" || break
+            if [[ -f "$VM_DIR/$VM_NAME.conf" ]]; then
+                print_status "ERROR" "VM name already exists"
+            else
+                break
+            fi
         fi
     done
 
-    read -p "$(print_status "INPUT" "Hostname (default: $VM_NAME): ")" HOSTNAME
-    HOSTNAME="${HOSTNAME:-$VM_NAME}"
+    while true; do
+        read -p "$(print_status "INPUT" "Hostname (default: $VM_NAME): ")" HOSTNAME
+        HOSTNAME="${HOSTNAME:-$VM_NAME}"
+        if validate_input "name" "$HOSTNAME"; then break; fi
+    done
 
-    read -p "$(print_status "INPUT" "Username (default: $DEFAULT_USERNAME): ")" USERNAME
-    USERNAME="${USERNAME:-$DEFAULT_USERNAME}"
+    while true; do
+        read -p "$(print_status "INPUT" "Username (default: $DEFAULT_USERNAME): ")" USERNAME
+        USERNAME="${USERNAME:-$DEFAULT_USERNAME}"
+        if validate_input "username" "$USERNAME"; then break; fi
+    done
 
     read -s -p "$(print_status "INPUT" "Password (default: $DEFAULT_PASSWORD): ")" PASSWORD
     PASSWORD="${PASSWORD:-$DEFAULT_PASSWORD}"
     echo
 
-    read -p "$(print_status "INPUT" "Disk Size (default: 20G): ")" DISK_SIZE
-    DISK_SIZE="${DISK_SIZE:-20G}"
+    while true; do
+        read -p "$(print_status "INPUT" "Disk Size e.g., 20G (default: 20G): ")" DISK_SIZE
+        DISK_SIZE="${DISK_SIZE:-20G}"
+        if validate_input "size" "$DISK_SIZE"; then break; fi
+    done
 
-    read -p "$(print_status "INPUT" "Memory in MB (default: 2048): ")" MEMORY
-    MEMORY="${MEMORY:-2048}"
+    while true; do
+        read -p "$(print_status "INPUT" "Memory in MB e.g., 2048 (default: 2048): ")" MEMORY
+        MEMORY="${MEMORY:-2048}"
+        if validate_input "number" "$MEMORY"; then break; fi
+    done
 
-    read -p "$(print_status "INPUT" "CPU Cores (default: 2): ")" CPUS
-    CPUS="${CPUS:-2}"
+    while true; do
+        read -p "$(print_status "INPUT" "CPU Cores e.g., 2 (default: 2): ")" CPUS
+        CPUS="${CPUS:-2}"
+        if validate_input "number" "$CPUS"; then break; fi
+    done
 
-    read -p "$(print_status "INPUT" "SSH Port Forward (default: 2222): ")" SSH_PORT
-    SSH_PORT="${SSH_PORT:-2222}"
+    while true; do
+        read -p "$(print_status "INPUT" "SSH Port Forward e.g., 2222 (default: 2222): ")" SSH_PORT
+        SSH_PORT="${SSH_PORT:-2222}"
+        if validate_input "port" "$SSH_PORT"; then break; fi
+    done
 
     GUI_MODE=false
     read -p "$(print_status "INPUT" "Enable GUI mode? (y/N): ")" gui_input
     [[ "$gui_input" =~ ^[Yy]$ ]] && GUI_MODE=true
 
-    read -p "$(print_status "INPUT" "Additional Port Forwards (e.g., 8080:80, press Enter for none): ")" PORT_FORWARDS
+    while true; do
+        read -p "$(print_status "INPUT" "Additional Port Forwards (e.g., 8080:80, press Enter for none): ")" PORT_FORWARDS
+        if [[ -z "$PORT_FORWARDS" ]]; then
+            break
+        fi
+        
+        valid=true
+        IFS=',' read -ra forwards <<< "$PORT_FORWARDS"
+        for forward in "${forwards[@]}"; do
+            if [[ ! "$forward" =~ ^[0-9]+:[0-9]+$ ]]; then
+                valid=false
+                break
+            fi
+        done
+
+        if $valid; then
+            break
+        else
+            print_status "ERROR" "Invalid port format! Must be in format host:guest (e.g., 8080:80 or 8080:80,9090:90)"
+        fi
+    done
 
     IMG_FILE="$VM_DIR/$VM_NAME.img"
     SEED_FILE="$VM_DIR/$VM_NAME-seed.iso"
@@ -364,19 +419,35 @@ main_menu() {
             1) create_new_vm ;;
             2) 
                read -p "$(print_status "INPUT" "Enter VM index number to start: ")" vm_num
-               [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -le $vm_count ] && start_vm "${vms[$((vm_num-1))]}"
+               if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
+                   start_vm "${vms[$((vm_num-1))]}"
+               else
+                   print_status "ERROR" "Invalid VM number."
+               fi
                ;;
             3)
                read -p "$(print_status "INPUT" "Enter VM index number to stop: ")" vm_num
-               [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -le $vm_count ] && stop_vm "${vms[$((vm_num-1))]}"
+               if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
+                   stop_vm "${vms[$((vm_num-1))]}"
+               else
+                   print_status "ERROR" "Invalid VM number."
+               fi
                ;;
             4)
                read -p "$(print_status "INPUT" "Enter VM index number: ")" vm_num
-               [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -le $vm_count ] && show_vm_info "${vms[$((vm_num-1))]}"
+               if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
+                   show_vm_info "${vms[$((vm_num-1))]}"
+               else
+                   print_status "ERROR" "Invalid VM number."
+               fi
                ;;
             5)
                read -p "$(print_status "INPUT" "Enter VM index number to delete: ")" vm_num
-               [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -le $vm_count ] && delete_vm "${vms[$((vm_num-1))]}"
+               if [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -ge 1 ] && [ "$vm_num" -le $vm_count ]; then
+                   delete_vm "${vms[$((vm_num-1))]}"
+               else
+                   print_status "ERROR" "Invalid VM number."
+               fi
                ;;
             0) print_status "INFO" "Exiting Disknogamerz VM Manager."; exit 0 ;;
             *) print_status "ERROR" "Invalid option." ;;
