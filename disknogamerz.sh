@@ -425,12 +425,20 @@ start_vm() {
         echo -e "  ${BOLD}Credentials:${RESET} ${FG_GRAY}User:${RESET} $USERNAME ${FG_GRAY}│ Password:${RESET} $PASSWORD"
         echo -e " ${FG_GRAY}─────────────────────────────────────────────────────────${RESET}\n"
         
+        local cpu_model="host"
+        local enable_kvm=true
+
+        if ! [ -w /dev/kvm ]; then
+            print_status "WARN" "/dev/kvm unreadable or missing. Falling back to software emulation (qemu64)..."
+            cpu_model="qemu64"
+            enable_kvm=false
+        fi
+
         local qemu_cmd=(
             qemu-system-x86_64
             -m "$MEMORY"
             -smp "$CPUS"
-            -cpu host
-            -enable-kvm
+            -cpu "$cpu_model"
             -drive "file=$IMG_FILE,format=qcow2,if=virtio"
             -drive "file=$SEED_FILE,format=raw,if=virtio"
             -boot order=c
@@ -438,11 +446,8 @@ start_vm() {
             -netdev "user,id=n0,hostfwd=tcp::$SSH_PORT-:22"
         )
 
-        # KVM hardware virtualization fallback check
-        if ! [ -w /dev/kvm ]; then
-            print_status "WARN" "/dev/kvm unreadable or missing. Falling back to software emulation (qemu64)..."
-            qemu_cmd=("${qemu_cmd[@]/-enable-kvm/}")
-            qemu_cmd=("${qemu_cmd[@]/-cpu host/-cpu qemu64}")
+        if [[ "$enable_kvm" == true ]]; then
+            qemu_cmd+=(-enable-kvm)
         fi
 
         if [[ -n "$PORT_FORWARDS" ]]; then
