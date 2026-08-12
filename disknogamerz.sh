@@ -2,7 +2,7 @@
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║                 DISKNOGAMERZ VM MANAGER                      ║
-# ║             Ultra-Fast Turbo Edition                         ║
+# ║              Background Execution & Stable                   ║
 # ╚══════════════════════════════════════════════════════════════╝
 
 NC='\033[0m'
@@ -28,8 +28,6 @@ declare -A OS_OPTIONS=(
 
 display_header() {
     clear
-    tput civis 2>/dev/null || true
-
     echo -e "${C_NEON_PINK}"
     cat << 'EOF'
   ██████╗ ██╗███████╗██╗  ██╗███╗   ██╗██████╗ ██████╗  ██████╗ 
@@ -42,7 +40,8 @@ EOF
     echo -e "${NC}"
 
     echo -e "${C_CYAN}╔══════════════════════════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${C_CYAN}║${NC} ${C_BRIGHT_CYAN}${BOLD}           DISKNOGAMERZ VIRTUAL MACHINE CONTROL CENTER (TURBO)${NC}           ${C_CYAN}║${NC}"
+    echo -e "${C_CYAN}║${NC} ${C_BRIGHT_CYAN}${BOLD}                 DISKNOGAMERZ VIRTUAL MACHINE CONTROL CENTER${NC}                  ${C_CYAN}║${NC}"
+    echo -e "${C_CYAN}║${NC} ${C_GRAY}                    Powered by QEMU • KVM • Cloud-Init • Linux${NC}                    ${C_CYAN}║${NC}"
     echo -e "${C_CYAN}╠══════════════════════════════════════════════════════════════════════════════════╣${NC}"
     printf "${C_CYAN}║${NC} ${C_YELLOW}✦ Host:${NC} %-25s ${C_YELLOW}✦ User:${NC} %-26s ${C_CYAN}║${NC}\n" "$(hostname)" "$(whoami)"
     printf "${C_CYAN}║${NC} ${C_YELLOW}✦ Kernel:${NC} %-23s ${C_YELLOW}✦ Arch:${NC} %-26s ${C_CYAN}║${NC}\n" "$(uname -r)" "$(uname -m)"
@@ -105,7 +104,6 @@ check_dependencies() {
 
 cleanup() {
     rm -f user-data meta-data
-    tput cnorm 2>/dev/null || true
 }
 
 get_vm_list() {
@@ -168,6 +166,8 @@ setup_vm_image() {
 hostname: $HOSTNAME
 ssh_pwauth: true
 disable_root: false
+packages:
+  - neofetch
 users:
   - name: $USERNAME
     sudo: ALL=(ALL) NOPASSWD:ALL
@@ -178,6 +178,8 @@ chpasswd:
     root:$PASSWORD
     $USERNAME:$PASSWORD
   expire: false
+runcmd:
+  - echo "neofetch" >> /home/$USERNAME/.bashrc
 EOF
 
     cat > meta-data <<EOF
@@ -270,23 +272,32 @@ create_new_vm() {
     save_vm_config
 }
 
+is_vm_running() {
+    pgrep -f "qemu-system-x86_64.*$1.img" >/dev/null
+}
+
 start_vm() {
     local vm_name=$1
     if load_vm_config "$vm_name"; then
+        if is_vm_running "$vm_name"; then
+            print_status "WARN" "VM '$vm_name' is ALREADY running!"
+            return
+        fi
+
         echo -e "\n${C_BRIGHT_CYAN}╔══════════════════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "${C_BRIGHT_CYAN}║${NC} ${C_NEON_GREEN}${BOLD}LAUNCHING VIRTUAL MACHINE: $vm_name${NC}"
+        echo -e "${C_BRIGHT_CYAN}║${NC} ${C_NEON_GREEN}${BOLD}STARTING VIRTUAL MACHINE IN BACKGROUND: $vm_name${NC}"
         echo -e "${C_BRIGHT_CYAN}╠══════════════════════════════════════════════════════════════════════════╣${NC}"
         echo -e "${C_BRIGHT_CYAN}║${NC} ${C_YELLOW}SSH Command :${NC} ssh -p $SSH_PORT $USERNAME@localhost"
         echo -e "${C_BRIGHT_CYAN}║${NC} ${C_YELLOW}Password    :${NC} $PASSWORD"
         echo -e "${C_BRIGHT_CYAN}╚══════════════════════════════════════════════════════════════════════════╝${NC}\n"
-        
-        # Acceleration & CPU Optimization Detection
-        local accel_flags=("-machine" "q35,accel=kvm:tcg" "-cpu" "max")
+
+        local accel_flags=()
         if [ -c /dev/kvm ] && [ -w /dev/kvm ]; then
             accel_flags=("-enable-kvm" "-cpu" "host")
             print_status "INFO" "Hardware KVM Acceleration: ENABLED 🚀"
         else
-            print_status "WARN" "Software Emulation (KVM not available). Enabling Turbo TCG settings..."
+            accel_flags=("-cpu" "max")
+            print_status "WARN" "Software Emulation Mode (KVM not available)."
         fi
 
         local qemu_cmd=(
@@ -294,11 +305,12 @@ start_vm() {
             "${accel_flags[@]}"
             -m "$MEMORY"
             -smp "$CPUS"
-            -drive "file=$IMG_FILE,format=qcow2,if=virtio,cache=writeback,aio=threads"
+            -drive "file=$IMG_FILE,format=qcow2,if=virtio"
             -drive "file=$SEED_FILE,format=raw,if=virtio"
             -boot order=c
             -netdev "user,id=n0,hostfwd=tcp::$SSH_PORT-:22"
             -device virtio-net-pci,netdev=n0
+            -nographic
         )
 
         if [[ -n "${PORT_FORWARDS:-}" ]]; then
@@ -311,19 +323,24 @@ start_vm() {
             done
         fi
 
-        if [[ "$GUI_MODE" == true ]]; then
-            qemu_cmd+=(-vga virtio -display gtk)
+        local log_file="$VM_DIR/$vm_name.log"
+        print_status "INFO" "Launching QEMU process in background..."
+        
+        nohup "${qemu_cmd[@]}" > "$log_file" 2>&1 &
+        local qemu_pid=$!
+        
+        sleep 2
+
+        if kill -0 "$qemu_pid" 2>/dev/null; then
+            print_status "SUCCESS" "VM '$vm_name' started successfully (PID: $qemu_pid)!"
+            print_status "INFO" "Connect anytime using: ssh -p $SSH_PORT $USERNAME@localhost"
         else
-            qemu_cmd+=(-nographic -serial mon:stdio)
+            print_status "ERROR" "VM failed to start! Here is the error log:"
+            echo -e "${C_RED}----------------------------------------${NC}"
+            cat "$log_file"
+            echo -e "${C_RED}----------------------------------------${NC}"
         fi
-
-        print_status "INFO" "Booting VM Kernel..."
-        "${qemu_cmd[@]}"
     fi
-}
-
-is_vm_running() {
-    pgrep -f "qemu-system-x86_64.*$1.img" >/dev/null
 }
 
 stop_vm() {
@@ -332,7 +349,7 @@ stop_vm() {
         if is_vm_running "$vm_name"; then
             print_status "INFO" "Stopping VM: $vm_name"
             pkill -f "qemu-system-x86_64.*$IMG_FILE"
-            print_status "SUCCESS" "VM stopped."
+            print_status "SUCCESS" "VM stopped successfully."
         else
             print_status "INFO" "VM is not running."
         fi
@@ -345,7 +362,8 @@ delete_vm() {
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         if load_vm_config "$vm_name"; then
-            rm -f "$IMG_FILE" "$SEED_FILE" "$VM_DIR/$vm_name.conf"
+            pkill -f "qemu-system-x86_64.*$IMG_FILE" 2>/dev/null
+            rm -f "$IMG_FILE" "$SEED_FILE" "$VM_DIR/$vm_name.conf" "$VM_DIR/$vm_name.log"
             print_status "SUCCESS" "VM deleted."
         fi
     fi
@@ -365,7 +383,6 @@ show_vm_info() {
         printf "${C_MAGENTA}║${NC} %-15s : %-53s ${C_MAGENTA}║${NC}\n" "CPUs" "$CPUS Cores"
         printf "${C_MAGENTA}║${NC} %-15s : %-53s ${C_MAGENTA}║${NC}\n" "Disk" "$DISK_SIZE"
         echo -e "${C_MAGENTA}╚══════════════════════════════════════════════════════════════════════════╝${NC}\n"
-        read -p "$(print_status "INPUT" "Press [Enter] to return...")"
     fi
 }
 
@@ -417,7 +434,8 @@ main_menu() {
                ;;
             0) exit 0 ;;
         esac
-        read -p "$(print_status "INPUT" "Press [Enter] to continue...")"
+        echo
+        read -p "$(print_status "INPUT" "Press [Enter] to return to main menu...")"
     done
 }
 
