@@ -2,7 +2,7 @@
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║                 DISKNOGAMERZ VM MANAGER                      ║
-# ║              Background Execution & Stable                   ║
+# ║         Auto-Boot Monitor & Direct SSH Integration           ║
 # ╚══════════════════════════════════════════════════════════════╝
 
 NC='\033[0m'
@@ -91,14 +91,14 @@ validate_input() {
 }
 
 check_dependencies() {
-    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img")
+    local deps=("qemu-system-x86_64" "wget" "cloud-localds" "qemu-img" "ssh")
     local missing_deps=()
     for dep in "${deps[@]}"; do
         command -v "$dep" &> /dev/null || missing_deps+=("$dep")
     done
     if [ ${#missing_deps[@]} -ne 0 ]; then
         print_status "WARN" "Installing missing dependencies..."
-        sudo apt-get update && sudo apt-get install -y qemu-system-x86-64 qemu-utils cloud-image-utils wget
+        sudo apt-get update && sudo apt-get install -y qemu-system-x86-64 qemu-utils cloud-image-utils wget openssh-client
     fi
 }
 
@@ -152,7 +152,7 @@ setup_vm_image() {
     mkdir -p "$VM_DIR"
     
     if [[ ! -f "$IMG_FILE" ]]; then
-        print_status "INFO" "Downloading image..."
+        print_status "INFO" "Downloading base image..."
         wget --progress=bar:force "$IMG_URL" -O "$IMG_FILE.tmp"
         mv "$IMG_FILE.tmp" "$IMG_FILE"
     fi
@@ -160,7 +160,7 @@ setup_vm_image() {
     print_status "INFO" "Resizing disk to $DISK_SIZE..."
     qemu-img resize "$IMG_FILE" "$DISK_SIZE" 2>/dev/null || true
 
-    print_status "INFO" "Generating Cloud-Init configuration..."
+    print_status "INFO" "Configuring Cloud-Init with automatic Neofetch startup..."
     cat > user-data <<EOF
 #cloud-config
 hostname: $HOSTNAME
@@ -180,6 +180,7 @@ chpasswd:
   expire: false
 runcmd:
   - echo "neofetch" >> /home/$USERNAME/.bashrc
+  - echo "neofetch" >> /root/.bashrc
 EOF
 
     cat > meta-data <<EOF
@@ -279,67 +280,90 @@ is_vm_running() {
 start_vm() {
     local vm_name=$1
     if load_vm_config "$vm_name"; then
-        if is_vm_running "$vm_name"; then
-            print_status "WARN" "VM '$vm_name' is ALREADY running!"
-            return
-        fi
-
         echo -e "\n${C_BRIGHT_CYAN}╔══════════════════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "${C_BRIGHT_CYAN}║${NC} ${C_NEON_GREEN}${BOLD}STARTING VIRTUAL MACHINE IN BACKGROUND: $vm_name${NC}"
+        echo -e "${C_BRIGHT_CYAN}║${NC} ${C_NEON_GREEN}${BOLD}LAUNCHING VIRTUAL MACHINE: $vm_name${NC}"
         echo -e "${C_BRIGHT_CYAN}╠══════════════════════════════════════════════════════════════════════════╣${NC}"
         echo -e "${C_BRIGHT_CYAN}║${NC} ${C_YELLOW}SSH Command :${NC} ssh -p $SSH_PORT $USERNAME@localhost"
+        echo -e "${C_BRIGHT_CYAN}║${NC} ${C_YELLOW}Username    :${NC} $USERNAME"
         echo -e "${C_BRIGHT_CYAN}║${NC} ${C_YELLOW}Password    :${NC} $PASSWORD"
         echo -e "${C_BRIGHT_CYAN}╚══════════════════════════════════════════════════════════════════════════╝${NC}\n"
 
-        local accel_flags=()
-        if [ -c /dev/kvm ] && [ -w /dev/kvm ]; then
-            accel_flags=("-enable-kvm" "-cpu" "host")
-            print_status "INFO" "Hardware KVM Acceleration: ENABLED 🚀"
-        else
-            accel_flags=("-cpu" "max")
-            print_status "WARN" "Software Emulation Mode (KVM not available)."
-        fi
+        if ! is_vm_running "$vm_name"; then
+            local accel_flags=()
+            if [ -c /dev/kvm ] && [ -w /dev/kvm ]; then
+                accel_flags=("-enable-kvm" "-cpu" "host")
+                print_status "INFO" "Hardware KVM Acceleration: ENABLED 🚀"
+            else
+                accel_flags=("-cpu" "max")
+                print_status "WARN" "Software Emulation Mode (KVM not available)."
+            fi
 
-        local qemu_cmd=(
-            qemu-system-x86_64
-            "${accel_flags[@]}"
-            -m "$MEMORY"
-            -smp "$CPUS"
-            -drive "file=$IMG_FILE,format=qcow2,if=virtio"
-            -drive "file=$SEED_FILE,format=raw,if=virtio"
-            -boot order=c
-            -netdev "user,id=n0,hostfwd=tcp::$SSH_PORT-:22"
-            -device virtio-net-pci,netdev=n0
-            -nographic
-        )
+            local qemu_cmd=(
+                qemu-system-x86_64
+                "${accel_flags[@]}"
+                -m "$MEMORY"
+                -smp "$CPUS"
+                -drive "file=$IMG_FILE,format=qcow2,if=virtio"
+                -drive "file=$SEED_FILE,format=raw,if=virtio"
+                -boot order=c
+                -netdev "user,id=n0,hostfwd=tcp::$SSH_PORT-:22"
+                -device virtio-net-pci,netdev=n0
+                -nographic
+            )
 
-        if [[ -n "${PORT_FORWARDS:-}" ]]; then
-            IFS=',' read -ra forwards <<< "$PORT_FORWARDS"
-            local idx=1
-            for forward in "${forwards[@]}"; do
-                IFS=':' read -r host_port guest_port <<< "$forward"
-                qemu_cmd+=(-netdev "user,id=n${idx},hostfwd=tcp::$host_port-:$guest_port" -device "virtio-net-pci,netdev=n${idx}")
-                ((idx++))
+            if [[ -n "${PORT_FORWARDS:-}" ]]; then
+                IFS=',' read -ra forwards <<< "$PORT_FORWARDS"
+                local idx=1
+                for forward in "${forwards[@]}"; do
+                    IFS=':' read -r host_port guest_port <<< "$forward"
+                    qemu_cmd+=(-netdev "user,id=n${idx},hostfwd=tcp::$host_port-:$guest_port" -device "virtio-net-pci,netdev=n${idx}")
+                    ((idx++))
+                done
+            fi
+
+            local log_file="$VM_DIR/$vm_name.log"
+            print_status "INFO" "Initializing QEMU Kernel process..."
+            nohup "${qemu_cmd[@]}" > "$log_file" 2>&1 &
+            local qemu_pid=$!
+
+            sleep 2
+            if ! kill -0 "$qemu_pid" 2>/dev/null; then
+                print_status "ERROR" "VM failed to start! Boot Log:"
+                echo -e "${C_RED}----------------------------------------${NC}"
+                cat "$log_file"
+                echo -e "${C_RED}----------------------------------------${NC}"
+                return
+            fi
+
+            print_status "INFO" "Booting OS & starting SSH service..."
+            echo -n "   "
+            local retries=0
+            while [ $retries -lt 45 ]; do
+                if (echo > /dev/tcp/localhost/"$SSH_PORT") 2>/dev/null; then
+                    break
+                fi
+                echo -n "█"
+                sleep 2
+                ((retries++))
             done
-        fi
+            echo -e "\n"
 
-        local log_file="$VM_DIR/$vm_name.log"
-        print_status "INFO" "Launching QEMU process in background..."
-        
-        nohup "${qemu_cmd[@]}" > "$log_file" 2>&1 &
-        local qemu_pid=$!
-        
-        sleep 2
-
-        if kill -0 "$qemu_pid" 2>/dev/null; then
-            print_status "SUCCESS" "VM '$vm_name' started successfully (PID: $qemu_pid)!"
-            print_status "INFO" "Connect anytime using: ssh -p $SSH_PORT $USERNAME@localhost"
+            if [ $retries -eq 45 ]; then
+                print_status "WARN" "Boot taking longer than expected. Log tail:"
+                tail -n 8 "$log_file"
+                return
+            fi
         else
-            print_status "ERROR" "VM failed to start! Here is the error log:"
-            echo -e "${C_RED}----------------------------------------${NC}"
-            cat "$log_file"
-            echo -e "${C_RED}----------------------------------------${NC}"
+            print_status "INFO" "VM '$vm_name' is already running!"
         fi
+
+        print_status "SUCCESS" "VM Boot Complete! Connecting to interactive SSH shell..."
+        echo -e " ${C_NEON_PINK}✦ Enter Password:${NC} ${C_YELLOW}$PASSWORD${NC}\n"
+        
+        ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$SSH_PORT" "$USERNAME@localhost"
+        
+        echo
+        print_status "INFO" "Exited VM SSH session. Returned to Disknogamerz Manager."
     fi
 }
 
@@ -405,7 +429,7 @@ main_menu() {
         echo -e " ${C_YELLOW}${BOLD}DISKNOGAMERZ CONTROL OPTIONS:${NC}"
         echo -e "   ${C_CYAN}[1]${NC} ➕ Create New VM"
         if [ $vm_count -gt 0 ]; then
-            echo -e "   ${C_CYAN}[2]${NC} ▶  Start VM"
+            echo -e "   ${C_CYAN}[2]${NC} ▶  Start / Connect VM"
             echo -e "   ${C_CYAN}[3]${NC} ⏹  Stop VM"
             echo -e "   ${C_CYAN}[4]${NC} ℹ  Show Spec Info"
             echo -e "   ${C_CYAN}[5]${NC} 🗑  Delete VM"
@@ -417,7 +441,7 @@ main_menu() {
         case $choice in
             1) create_new_vm ;;
             2) 
-               read -p "$(print_status "INPUT" "Enter VM index to START: ")" vm_num
+               read -p "$(print_status "INPUT" "Enter VM index to START/CONNECT: ")" vm_num
                [[ "$vm_num" =~ ^[0-9]+$ ]] && [ "$vm_num" -le $vm_count ] && start_vm "${vms[$((vm_num-1))]}"
                ;;
             3)
