@@ -3,7 +3,7 @@ set -euo pipefail
 
 # ╔═══════════════════════════════════════════════════════════════════════════╗
 # ║                      DISKNOGAMERZ VM MANAGER v5.2                         ║
-# ║          Gorilla-Engine Virtualization Platform for Web & CLI            ║
+# ║             Custom Virtualization Platform for Web & CLI                  ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
 
 readonly RESET="\033[0m"
@@ -25,7 +25,7 @@ VM_DIR="${VM_DIR:-$HOME/vms}"
 mkdir -p "$VM_DIR"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GORILLA ENGINE AUTO-DEPENDENCY INSTALLER
+# AUTO-DEPENDENCY INSTALLER
 # ─────────────────────────────────────────────────────────────────────────────
 install_dependencies() {
     local missing=()
@@ -54,12 +54,13 @@ print_status() {
     esac
 }
 
-# Flicker-free screen refresh mechanism
 display_header() {
     printf "\033[H\033[2J"
 
+    echo -e "${FG_RED}${BOLD}                       ★ SUBSCRIBE TO DISKNOGAMERZ ★${RESET}\n"
+
     echo -e "${FG_CYAN}${BOLD}"
-    cat << 'EOF'
+  cat << 'EOF'
   ██████╗ ██╗███████╗██╗  ██╗███╗   ██╗██████╗  █████╗ ███╗   ███╗███████╗██████╗ ███████╗
   ██╔══██╗██║██╔════╝██║ ██╔╝████╗  ██║██╔══██╗██╔══██╗████╗ ████║██╔════╝██╔══██╗╚══███╔╝
   ██║  ██║██║███████╗█████═╝ ██╔██╗ ██║██║  ██║███████║██╔████╔██║█████╗  ██████╔╝  ███╔╝ 
@@ -70,7 +71,7 @@ EOF
     echo -e "${RESET}"
 
     echo -e "${FG_MAGENTA}╭──────────────────────────────────────────────────────────────────────────────────────────────────╮${RESET}"
-    echo -e "${FG_MAGENTA}│${RESET}  ${BOLD}${FG_LIGHT_CYAN}❖  DISKNOGAMERZ VM MANAGER v5.2${RESET}  ${FG_GRAY}•${RESET}  ${FG_LIGHT_WHITE}Gorilla-Engine Powered Virtualization Platform${RESET}    ${FG_MAGENTA}│${RESET}"
+    echo -e "${FG_MAGENTA}│${RESET}  ${BOLD}${FG_LIGHT_CYAN}❖  DISKNOGAMERZ VM MANAGER v5.2${RESET}  ${FG_GRAY}•${RESET}  ${FG_LIGHT_WHITE}Next-Gen Virtualization Platform${RESET}               ${FG_MAGENTA}│${RESET}"
     echo -e "${FG_MAGENTA}╰──────────────────────────────────────────────────────────────────────────────────────────────────╯${RESET}"
     
     local host_str="$(hostname)"
@@ -89,6 +90,21 @@ get_vm_list() {
 load_vm_config() {
     local vm_name=$1
     local config_file="$VM_DIR/$vm_name.conf"
+    
+    # Reset config variables to safe defaults
+    VM_NAME="$vm_name"
+    OS_TYPE="ubuntu"
+    CODENAME="jammy"
+    USERNAME="ubuntu"
+    PASSWORD="password"
+    DISK_SIZE="20G"
+    MEMORY="2048"
+    CPUS="2"
+    SSH_PORT="2222"
+    ENABLE_TTYD="n"
+    IMG_FILE="$VM_DIR/$vm_name.qcow2"
+    SEED_FILE="$VM_DIR/$vm_name-seed.iso"
+
     if [[ -f "$config_file" ]]; then
         source "$config_file"
         return 0
@@ -102,7 +118,7 @@ is_vm_running() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GORILLA ENGINE VM BUILDER & RUNNER
+# VM BUILDER & RUNNER
 # ─────────────────────────────────────────────────────────────────────────────
 
 declare -A OS_OPTIONS=(
@@ -220,7 +236,7 @@ start_vm() {
             return
         fi
 
-        print_status "INFO" "Booting Gorilla-Engine Virtual Machine '$vm_name'..."
+        print_status "INFO" "Booting Virtual Machine '$vm_name'..."
 
         local cpu_accel="-cpu host"
         local kvm_flag="-enable-kvm"
@@ -231,27 +247,28 @@ start_vm() {
 
         nohup qemu-system-x86_64 \
             $kvm_flag \
-            -m "$MEMORY" \
-            -smp "$CPUS" \
+            -m "${MEMORY:-2048}" \
+            -smp "${CPUS:-2}" \
             $cpu_accel \
-            -drive "file=$IMG_FILE,format=qcow2,if=virtio" \
-            -drive "file=$SEED_FILE,format=raw,if=virtio" \
+            -drive "file=${IMG_FILE},format=qcow2,if=virtio" \
+            -drive "file=${SEED_FILE},format=raw,if=virtio" \
             -nographic \
-            -netdev "user,id=n1,hostfwd=tcp::$SSH_PORT-:22" \
+            -netdev "user,id=n1,hostfwd=tcp::${SSH_PORT:-2222}-:22" \
             -device "virtio-net-pci,netdev=n1" > "$VM_DIR/$vm_name.log" 2>&1 &
 
         sleep 2
         if is_vm_running "$vm_name"; then
             print_status "SUCCESS" "VM '$vm_name' is now running in background!"
             echo -e " ${FG_GRAY}─────────────────────────────────────────────────────────${RESET}"
-            echo -e "  ${BOLD}SSH Command:${RESET} ${FG_CYAN}ssh -p $SSH_PORT $USERNAME@localhost${RESET}"
-            echo -e "  ${BOLD}Credentials:${RESET} ${FG_GRAY}User:${RESET} $USERNAME ${FG_GRAY}│ Password:${RESET} $PASSWORD"
+            echo -e "  ${BOLD}SSH Command:${RESET} ${FG_CYAN}ssh -p ${SSH_PORT:-2222} ${USERNAME:-ubuntu}@localhost${RESET}"
+            echo -e "  ${BOLD}Credentials:${RESET} ${FG_GRAY}User:${RESET} ${USERNAME:-ubuntu} ${FG_GRAY}│ Password:${RESET} ${PASSWORD:-ubuntu}"
             echo -e " ${FG_GRAY}─────────────────────────────────────────────────────────${RESET}"
 
-            # Gorilla-Engine Cloudflare/ttyd launcher option
-            if [[ "$ENABLE_TTYD" =~ ^[Yy]$ ]] && command -v ttyd &>/dev/null; then
-                nohup ttyd -p $((SSH_PORT + 1000)) ssh -p "$SSH_PORT" "$USERNAME@localhost" >/dev/null 2>&1 &
-                print_status "SUCCESS" "Web Terminal active at: http://localhost:$((SSH_PORT + 1000))"
+            local ttyd_option="${ENABLE_TTYD:-y}"
+            if [[ "$ttyd_option" =~ ^[Yy]$ ]] && command -v ttyd &>/dev/null; then
+                local ttyd_port=$(( ${SSH_PORT:-2222} + 1000 ))
+                nohup ttyd -p "$ttyd_port" ssh -p "${SSH_PORT:-2222}" "${USERNAME:-ubuntu}@localhost" >/dev/null 2>&1 &
+                print_status "SUCCESS" "Web Terminal active at: http://localhost:$ttyd_port"
             fi
         else
             print_status "ERROR" "Failed to start VM. Check logs at $VM_DIR/$vm_name.log"
@@ -306,7 +323,7 @@ main_menu() {
                 fi
 
                 printf "${FG_CYAN}│${RESET} %2d ${FG_CYAN}│${RESET} %-20s ${FG_CYAN}│${RESET} %-11s ${FG_CYAN}│${RESET} %-12s ${FG_CYAN}│${RESET} %-10s ${FG_CYAN}│${RESET} %-22b ${FG_CYAN}│${RESET}\n" \
-                    "$((i+1))" "$vm" "${OS_TYPE:-N/A}" "${MEMORY:-2048}M/${CPUS:-2}c" "${SSH_PORT:-2222}" "$status_badge"
+                    "$((i+1))" "$vm" "${OS_TYPE:-ubuntu}" "${MEMORY:-2048}M/${CPUS:-2}c" "${SSH_PORT:-2222}" "$status_badge"
             done
         else
             printf "${FG_CYAN}│${RESET} %-76s ${FG_CYAN}│${RESET}\n" " ${FG_GRAY}No virtual machines configured yet. Select option [1] to create one.${RESET}"
